@@ -22,19 +22,44 @@ namespace nn {
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ RNNImplBase ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 namespace detail {
 template <typename Derived>
-RNNImplBase<Derived>::RNNImplBase(
-    const RNNOptionsBase& options_,
-    optional<CuDNNMode> cudnn_mode,
-    int64_t number_of_gates)
-    : options(options_),
-      number_of_gates_(number_of_gates),
-      cudnn_mode_(std::move(cudnn_mode)) {
+RNNImplBase<Derived>::RNNImplBase(RNNOptionsBase options_)
+  : options(std::move(options_)) {
   reset();
 }
 
 template <typename Derived>
 void RNNImplBase<Derived>::reset() {
   const auto num_directions = options.bidirectional() ? 2 : 1;
+
+  TORCH_CHECK(
+    0 <= options.dropout() && options.dropout() <= 1,
+    "dropout should be a number in range [0, 1] ",
+    "representing the probability of an element being ",
+    "zeroed");
+
+  if (options.dropout() > 0 && options.num_layers() == 1) {
+    TORCH_WARN(
+      "dropout option adds dropout after all but last ",
+      "recurrent layer, so non-zero dropout expects ",
+      "num_layers greater than 1, but got dropout=", options.dropout(), " and ",
+      "num_layers=", options.num_layers());
+    )
+  }
+
+  int64_t gate_size = 0;
+  if (c10::get_if<enumtype::kLSTM>(&options.mode())) {
+    gate_size = 4 * options.hidden_size();
+  } else if (c10::get_if<enumtype::kGRU>(&options.mode())) {
+    gate_size = 3 * options.hidden_size();
+  } else if (c10::get_if<enumtype::kRNN_TANH>(&options.mode())) {
+    gate_size = options.hidden_size();
+  } else if (c10::get_if<enumtype::kRNN_RELU>(&options.mode())) {
+    gate_size = options.hidden_size();
+  } else {
+    TORCH_CHECK(false, "Unrecognized RNN mode: " + torch::enumtype::get_enum_name(v));
+  }
+
+  // yf225 TODO: we need to fix the following:
 
   w_ih.resize(options.layers() * num_directions);
   w_hh.resize(options.layers() * num_directions);
